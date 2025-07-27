@@ -3,7 +3,7 @@
      width="15%"
      alt="nFlows logo\">
 
-# nflows: tools
+# nFlows: Tools
 
 Command-line utilities for validating nFlows output and analyzing execution results
 
