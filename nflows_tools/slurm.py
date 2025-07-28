@@ -69,6 +69,7 @@ def main():
         execute_command=args.execute_command,
         validate_command=args.validate_command,
         log_dir=args.log_dir,
+        time_limit=args.time_limit,
         repeats=args.repeats
     )
 
