@@ -469,7 +469,7 @@ def print_profile(data, matrix_relative_latencies, time_unit, payload_unit, expo
     }
 
     # Ensure the total matrix is square by reindexing
-    max_dim = max(len(matrix_accesses_total.index), len(matrix_accesses_total.columns))
+    max_dim = max(matrix_accesses_total.index.max(), matrix_accesses_total.columns.max()) + 1
     full_index = range(max_dim)
     matrix_accesses_total = matrix_accesses_total.reindex(index=full_index, columns=full_index, fill_value=0)
     matrix_accesses_total_percent = matrix_accesses_total / matrix_accesses_total.values.sum()
