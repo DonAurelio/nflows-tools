@@ -163,8 +163,9 @@ def get_memory_spreading_profile(df_profile, filter_spread=False):
 
 def compute_data_access_pattern_performance(accesses_matrix, relatve_latencies):
     """
+    REFERENCE: A Source-to-source NUMA Profiling Approach - Machado, Tadonki, and Senger (2023)
     Computes the NUMA metric based on the provided matrices.
-    
+
     Parameters:
         accesses_matrix (pd.DataFrame): Matrix of task accesses.
         relatve_latencies (pd.DataFrame): Matrix of distances (hwloc/numactl relative latencies).
@@ -395,7 +396,8 @@ def print_df(data, title):
     print("\n" + "\n".join(f"  {line}" for line in table_str.split("\n")))
 
 
-def profile_compute(data, matrix_relative_latencies, time_unit, payload_unit):
+def profile_compute(data, rel_lat_matrix, time_unit, payload_unit):
+
     user_data = data['user']
     trace_data = data['trace']
     runtime_data = data['runtime']
@@ -411,7 +413,7 @@ def profile_compute(data, matrix_relative_latencies, time_unit, payload_unit):
     matrix_memory_pages_migrations = get_memory_migrations_profile(df_profile, migrations=True)
     
     data_access_pattern_performance = compute_data_access_pattern_performance(
-        matrix_accesses_total, matrix_relative_latencies) if not matrix_relative_latencies.empty else -1
+        matrix_accesses_total, rel_lat_matrix) if not rel_lat_matrix.empty else -1
 
     df_output_profile = df_profile[["task_name", "core_id", "cpu_node", "mem_node", "data_item", "access_type"]]
 
