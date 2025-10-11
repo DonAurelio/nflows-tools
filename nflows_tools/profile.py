@@ -484,7 +484,7 @@ def profile_compute(data, matrix_relative_latencies, time_unit, payload_unit):
     }
 
     output_data = {
-        **system, **workflow, **profile, **runtime, **machine,  
+        **system, **workflow, **profile, **runtime, **machine,
         **ratios, **metrics, **durations, **payloads, **accesses
     }
 
