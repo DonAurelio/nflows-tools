@@ -395,7 +395,7 @@ def print_df(data, title):
     print("\n" + "\n".join(f"  {line}" for line in table_str.split("\n")))
 
 
-def print_profile(data, matrix_relative_latencies, time_unit, payload_unit, export_csv):
+def profile_compute(data, matrix_relative_latencies, time_unit, payload_unit):
     user_data = data['user']
     trace_data = data['trace']
     runtime_data = data['runtime']
@@ -483,24 +483,28 @@ def print_profile(data, matrix_relative_latencies, time_unit, payload_unit, expo
         "matrix_accesses_total_percent": (matrix_accesses_total_percent, matrix_accesses_total_percent.columns, 'data[0].sum().sum()'),
     }
 
-    if export_csv:
-        output_data = {
-            **system, **runtime, **machine, **ratios, 
-            **metrics, **durations, **payloads, **accesses
-        }
+    output_data = {
+        **system, **workflow, **profile, **runtime, **machine,  
+        **ratios, **metrics, **durations, **payloads, **accesses
+    }
 
-        output_series = pd.Series(output_data)
-        output_series.to_csv(export_csv, header=False)
-        print(f"Profile exported: {export_csv}")
+    return output_scalars, output_matrices, output_data
 
-        return
 
+def profile_print(output_scalars, output_matrices):
     for key, value in output_scalars.items():
         print_dict(value, key)
 
     for key, value in output_matrices.items():
         print_df(value, key)
     print("")
+
+
+def profile_export(output_data, export_csv):
+    output_series = pd.Series(output_data)
+    output_series.to_csv(export_csv, header=False)
+    print(f"Profile exported: {export_csv}")
+
 
 def main():
     parser = argparse.ArgumentParser(description="Process NUMA access data.")
@@ -521,7 +525,11 @@ def main():
     else:
         rel_lat_matrix = pd.DataFrame()
 
-    print_profile(data, rel_lat_matrix, args.time_unit, args.payload_unit, args.export_csv)
+    output_scalars, output_matrices, output_data = profile_compute(data, rel_lat_matrix, args.time_unit, args.payload_unit)
+    if args.export_csv:
+        profile_export(output_data, args.export_csv)
+    else:
+        profile_print(output_scalars, output_matrices)
 
 if __name__ == "__main__":
     main()
