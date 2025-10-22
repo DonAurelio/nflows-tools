@@ -61,8 +61,8 @@ def main():
 
     args = parser.parse_args()
 
-    if input_file_rel_lat:
-        with open(input_file_rel_lat, 'r') as file:
+    if args.input_file_rel_lat:
+        with open(args.input_file_rel_lat, 'r') as file:
             dimension = int(file.readline().strip())
             rel_lat_matrix = pd.DataFrame([list(map(float, file.readline().split())) for _ in range(dimension)])
     else:

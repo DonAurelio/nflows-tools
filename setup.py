@@ -16,6 +16,7 @@ setup(
             'nflows_generate_dot=nflows_tools.dot:main',
             'nflows_generate_gantt=nflows_tools.gantt:main',
             'nflows_generate_profile=nflows_tools.profile:main',
+            'nflows_generate_experiment_profile=nflows_tools.experiment:main',
             'nflows_generate_slurm=nflows_tools.slurm:main',
             'nflows_find_workflow_structs=nflows_tools.structures:main',
         ],

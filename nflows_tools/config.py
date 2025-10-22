@@ -2,8 +2,7 @@
 
 """
 @authors: ChatGPT
-@edited_by: Aurelio Vivas
-@promt:
+@edited_by: Aurelio Vivas <aa.vivas@uniandes.edu.co>
 """
 
 import json
