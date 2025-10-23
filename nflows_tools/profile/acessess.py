@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 
 """
-@authors: ChatGPT, DeepSeek
-@edited_by: Aurelio Vivas
-@promt:
+@authors: ChatGPT, DeepSeek, Aurelio Vivas <aa.vivas@uniandes.edu.co>
 """
 
 import yaml
@@ -396,7 +394,7 @@ def print_df(data, title):
     print("\n" + "\n".join(f"  {line}" for line in table_str.split("\n")))
 
 
-def profile_compute(data, rel_lat_matrix, time_unit, payload_unit):
+def build_profile(data, rel_lat_matrix, time_unit, payload_unit):
 
     user_data = data['user']
     trace_data = data['trace']
@@ -493,7 +491,7 @@ def profile_compute(data, rel_lat_matrix, time_unit, payload_unit):
     return output_scalars, output_matrices, output_data
 
 
-def profile_print(output_scalars, output_matrices):
+def print_profile(output_scalars, output_matrices):
     for key, value in output_scalars.items():
         print_dict(value, key)
 
@@ -502,7 +500,7 @@ def profile_print(output_scalars, output_matrices):
     print("")
 
 
-def profile_export(output_data, export_csv):
+def export_profile(output_data, export_csv):
     output_series = pd.Series(output_data)
     output_series.to_csv(export_csv, header=False)
     print(f"Profile exported: {export_csv}")
@@ -527,11 +525,11 @@ def main():
     else:
         rel_lat_matrix = pd.DataFrame()
 
-    output_scalars, output_matrices, output_data = profile_compute(data, rel_lat_matrix, args.time_unit, args.payload_unit)
+    output_scalars, output_matrices, output_data = build_profile(data, rel_lat_matrix, args.time_unit, args.payload_unit)
     if args.export_csv:
-        profile_export(output_data, args.export_csv)
+        export_profile(output_data, args.export_csv)
     else:
-        profile_print(output_scalars, output_matrices)
+        print_profile(output_scalars, output_matrices)
 
 if __name__ == "__main__":
     main()

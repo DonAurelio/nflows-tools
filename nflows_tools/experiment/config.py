@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 
 """
-@authors: ChatGPT
-@edited_by: Aurelio Vivas <aa.vivas@uniandes.edu.co>
+@authors: ChatGPT, Aurelio Vivas <aa.vivas@uniandes.edu.co>
 """
 
 import json

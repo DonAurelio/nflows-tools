@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 
 """
-@authors: DeepSeek
-@edited_by: Aurelio Vivas
-@promt:
+@authors: DeepSeek, Aurelio Vivas <aa.vivas@uniandes.edu.co>
 """
 
 import argparse
