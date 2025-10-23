@@ -6,9 +6,12 @@
 
 import yaml
 import pandas as pd
+import numpy as np
+from math import log2
 import networkx as nx
 import argparse
 
+from networkx.algorithms.isomorphism import GraphMatcher
 from networkx.drawing.nx_pydot import write_dot
 from collections import defaultdict, deque
 from tabulate import tabulate
@@ -161,231 +164,168 @@ def build_digraph(data, edge_strategy='combined', time_unit='us', payload_unit='
 
     return G
 
-# # ================================================================
-# # --------------------- Execution Metrics ------------------------
-# # ================================================================
+# ================================================================
+# --------------------- Basic Structural Metrics -----------------
+# ================================================================
 
-# def compute_critical_path(G, attr="dur", include="both", **kwargs):
-#     """
-#     Compute the critical path in a DAG.
+def num_vertices(G):
+    """Return number of vertices (|V|).
+    Meaning: Reflects workflow size or granularity."""
+    return G.number_of_nodes()
+
+def num_edges(G):
+    """Return number of edges (|E|).
+    Meaning: Indicates number of dependencies."""
+    return G.number_of_edges()
+
+def edge_density(G):
+    """Compute edge density = |E| / [|V|*(|V|-1)].
+    High value → more dependencies, denser DAG."""
+    n = G.number_of_nodes()
+    return 0 if n <= 1 else G.number_of_edges() / (n * (n - 1))
+
+def average_degree(G):
+    """Return average in-degree and out-degree.
+    High value → more interdependent tasks.
+    High fan-in → synchronization points; High fan-out → branching.
+    """
+    indeg = np.mean([d for _, d in G.in_degree()])
+    outdeg = np.mean([d for _, d in G.out_degree()])
+    return indeg, outdeg
+
+def nodes_by_level(G):
+    """Create a tree-like hierarchical layout for a DAG."""
+
+    # Compute levels using topological sort
+    levels = defaultdict(int)
+    in_degree = {n: 0 for n in G.nodes}
+    for u, v in G.edges:
+        in_degree[v] += 1
+
+    # BFS to assign levels
+    queue = deque([n for n in G.nodes if in_degree[n] == 0])
+    while queue:
+        node = queue.popleft()
+        for neighbor in G.successors(node):
+            levels[neighbor] = max(levels[neighbor], levels[node] + 1)
+            in_degree[neighbor] -= 1
+            if in_degree[neighbor] == 0:
+                queue.append(neighbor)
+
+    # Group nodes by level
+    level_nodes = defaultdict(list)
+    for node, level in levels.items():
+        level_nodes[level].append(node)
+
+    results = {}
+    for level in sorted(level_nodes.keys()):
+        nodes_at_level = level_nodes[level]
+        results[level] = len(nodes_at_level)
+
+    return results
+
+# ================================================================
+# ------------------- Hierarchical / Topological -----------------
+# ================================================================
+
+def topological_depth(G):
+    """
+    Compute the longest path length (height) in a DAG.
+
+    Meaning:
+    - High value → long sequential chain (deep workflow)
+    - Low value → shallow DAG (more parallelism)
+    """
+    if G.number_of_nodes() == 0:
+        return 0
+
+    # Initialize distance for each node
+    dist = {v: 0 for v in G.nodes()}
+
+    # Traverse in topological order
+    for v in nx.topological_sort(G):
+        for succ in G.successors(v):
+            dist[succ] = max(dist[succ], dist[v] + 1)
+
+    return max(dist.values()) if dist else 0
+
+def topological_width(G):
+    """Compute maximum width (max number of nodes in a topological level).
+    High value → high potential parallelism."""
+    levels = list(nx.topological_generations(G))
+    return max(len(lvl) for lvl in levels)
+
+def shape_factor(G):
+    """Return (width, height) and shape factor = width / height.
+    High value → flat DAG; Low value → deep DAG."""
+    height = topological_depth(G)
+    width = topological_width(G)
+    return width, height, width / height if height > 0 else np.nan
+
+# ================================================================
+# ----------------------- Regularity -----------------------------
+# ================================================================
+
+def degree_entropy_regularity(G):
+    """Entropy of degree distribution (in+out).
+
+    | Regularity score (R) | Structural meaning | Description                                           |
+    | -------------------- | ------------------ | ----------------------------------------------------- |
+    | **≈ 1.0**            | Perfectly regular  | All nodes have identical degrees → minimum entropy.   |
+    | **≈ 0.5**            | Moderately regular | Degree distribution shows some variation.             |
+    | **≈ 0.0**            | Highly irregular   | Degree probabilities are widely spread (max entropy). |
     
-#     Parameters:
-#         G       : A NetworkX DiGraph (must be a DAG).
-#         attr    : Attribute to aggregate (e.g., 'dur').
-#         include : 'nodes', 'edges', or 'both'.
+    Shannon entropy formula:
+    H = - Σ (p_i * log2(p_i))
+    where p_i is the probability of degree d_i.
+    TODO: I checked this and sees like it is correct. The ecuation is mentioned in literature.
+    I just need to double check the implementation and find the defining paper.
+    """
+    degs = [G.in_degree(n) + G.out_degree(n) for n in G.nodes()]
+    total = sum(degs)
+    if total == 0:
+        return 0
+    probs = [d / total for d in degs if d > 0]
+    H = -sum(p * log2(p) for p in probs)
+    return 1 - (H / log2(len(probs)))
 
-#     Returns:
-#         path           : List of node names (in order).
-#         total_duration : Sum of attribute along the path.
-#         node_attrs     : List of (node, attr value) if included.
-#         edge_attrs     : List of (u, v, attr value) if included.
-#     """
-#     if not nx.is_directed_acyclic_graph(G):
-#         raise ValueError("Critical path computation requires a DAG.")
+def degree_distribution_regularity(G):
+    """Measures how uniform in/out-degree distribution is (1 = perfectly regular).
+    A graph is regular if every node has the same in-degree and out-degree.
+    This metric quantifies how close the graph is to that ideal.
+    TODO: Seems coherent with the concept of regularity.
+    """
+    indeg = np.array([d for _, d in G.in_degree()])
+    outdeg = np.array([d for _, d in G.out_degree()])
+    total_deg = indeg + outdeg
+    if len(G) == 0 or total_deg.sum() == 0:
+        return 1.0
+    # Coefficient of variation: std / mean (lower = more regular)
+    cv = np.std(total_deg) / np.mean(total_deg)
+    # Transform into [0,1] where 1 = perfectly regular
+    return 1 / (1 + cv)
 
-#     # Compute the longest path (based on selected attr)
-#     G_cp = G.copy()
+def level_distribution_regularity(G):
+    """Regularity across topological levels of DAG.
+    Quantify the balance of nodes across topological levels.
+    - If each level has roughly the same number of nodes → high regularity (value close to 1).
+    - If some levels are dense and others sparse → low regularity (value closer to 0).
+    TODO: Seems coherent with the concept of regularity.
+    """
+    levels = {}
+    for node in nx.topological_sort(G):
+        preds = list(G.predecessors(node))
+        levels[node] = 0 if not preds else max(levels[p] for p in preds) + 1
+    counts = np.array(list(np.unique(list(levels.values()), return_counts=True)[1]))
+    return 1 / (1 + np.std(counts) / np.mean(counts))
 
-#     # Assign edge weights depending on inclusion
-#     for u, v in G_cp.edges:
-#         node_u = G_cp.nodes[u].get(attr, 0)
-#         edge_uv = G_cp[u][v].get(attr, 0)
-#         if include == "nodes":
-#             weight = node_u
-#         elif include == "edges":
-#             weight = edge_uv
-#         elif include == "both":
-#             weight = node_u + edge_uv
-#         else:
-#             raise ValueError("Invalid value for 'include': choose 'nodes', 'edges', or 'both'")
-#         G_cp[u][v]['weight'] = weight
-
-#     # Get the path with maximum total weight
-#     path = nx.dag_longest_path(G_cp, weight='weight')
-
-#     # Calculate total duration
-#     node_attrs = []
-#     edge_attrs = []
-#     total = 0
-
-#     for i, node in enumerate(path):
-#         if include in ("nodes", "both"):
-#             val = G.nodes[node].get(attr, 0)
-#             total += val
-#             node_attrs.append((node, val))
-
-#         if include in ("edges", "both") and i < len(path) - 1:
-#             u, v = path[i], path[i+1]
-#             val = G[u][v].get(attr, 0)
-#             total += val
-#             edge_attrs.append((u, v, val))
-
-#     return path, total, node_attrs, edge_attrs
-
-
-# # ================================================================
-# # --------------------- Basic Structural Metrics -----------------
-# # ================================================================
-
-# def num_vertices(G):
-#     """Return number of vertices (|V|).
-#     Meaning: Reflects workflow size or granularity."""
-#     return G.number_of_nodes()
-
-
-# def num_edges(G):
-#     """Return number of edges (|E|).
-#     Meaning: Indicates number of dependencies."""
-#     return G.number_of_edges()
-
-
-# def edge_density(G):
-#     """Compute edge density = |E| / [|V|*(|V|-1)].
-#     High value → more dependencies, denser DAG."""
-#     n = G.number_of_nodes()
-#     return 0 if n <= 1 else G.number_of_edges() / (n * (n - 1))
-
-
-# def average_degree(G):
-#     """Return average in-degree and out-degree.
-#     High value → more interdependent tasks.
-#     High fan-in → synchronization points; High fan-out → branching.
-#     """
-#     indeg = np.mean([d for _, d in G.in_degree()])
-#     outdeg = np.mean([d for _, d in G.out_degree()])
-#     return indeg, outdeg
-
-# def levels(G):
-#     """Create a tree-like hierarchical layout for a DAG."""
-
-#     # Compute levels using topological sort
-#     levels = defaultdict(int)
-#     in_degree = {n: 0 for n in G.nodes}
-#     for u, v in G.edges:
-#         in_degree[v] += 1
-
-#     # BFS to assign levels
-#     queue = deque([n for n in G.nodes if in_degree[n] == 0])
-#     while queue:
-#         node = queue.popleft()
-#         for neighbor in G.successors(node):
-#             levels[neighbor] = max(levels[neighbor], levels[node] + 1)
-#             in_degree[neighbor] -= 1
-#             if in_degree[neighbor] == 0:
-#                 queue.append(neighbor)
-
-#     # Group nodes by level
-#     level_nodes = defaultdict(list)
-#     for node, level in levels.items():
-#         level_nodes[level].append(node)
-
-#     results = {}
-#     for level, nodes_at_level in level_nodes.items():
-#         results[level] = len(nodes_at_level)
-
-#     return results
-
-
-# # ================================================================
-# # ------------------- Hierarchical / Topological -----------------
-# # ================================================================
-
-
-# def topological_depth(G):
-#     """
-#     Compute the longest path length (height) in a DAG.
-
-#     Meaning:
-#     - High value → long sequential chain (deep workflow)
-#     - Low value → shallow DAG (more parallelism)
-#     """
-#     if G.number_of_nodes() == 0:
-#         return 0
-
-#     # Initialize distance for each node
-#     dist = {v: 0 for v in G.nodes()}
-
-#     # Traverse in topological order
-#     for v in nx.topological_sort(G):
-#         for succ in G.successors(v):
-#             dist[succ] = max(dist[succ], dist[v] + 1)
-
-#     return max(dist.values()) if dist else 0
-
-
-# def topological_width(G):
-#     """Compute maximum width (max number of nodes in a topological level).
-#     High value → high potential parallelism."""
-#     levels = list(nx.topological_generations(G))
-#     return max(len(lvl) for lvl in levels)
-
-
-# def shape_factor(G):
-#     """Return (width, height) and shape factor = width / height.
-#     High value → flat DAG; Low value → deep DAG."""
-#     height = topological_depth(G)
-#     width = topological_width(G)
-#     return width, height, width / height if height > 0 else np.nan
-
-
-# # ================================================================
-# # ----------------------- Regularity -----------------------------
-# # ================================================================
-
-
-# def structural_entropy(G):
-#     """Entropy of degree distribution (in+out).
-#     High entropy → irregular structure; Low → regular.
-    
-#     Shannon entropy formula:
-#     H = - Σ (p_i * log2(p_i))
-#     where p_i is the probability of degree d_i.
-#     TODO: I checked this and sees like it is correct. The ecuation is mentioned in literature.
-#     I just need to double check the implementation and find the defining paper.
-#     """
-#     degs = [G.in_degree(n) + G.out_degree(n) for n in G.nodes()]
-#     total = sum(degs)
-#     if total == 0:
-#         return 0
-#     probs = [d / total for d in degs if d > 0]
-#     return -sum(p * log2(p) for p in probs)
-
-
-# def level_regularization(G):
-#     """Regularity across topological levels of DAG.
-#     TODO: Needs review.
-#     """
-#     levels = {}
-#     for node in nx.topological_sort(G):
-#         preds = list(G.predecessors(node))
-#         levels[node] = 0 if not preds else max(levels[p] for p in preds) + 1
-#     counts = np.array(list(np.unique(list(levels.values()), return_counts=True)[1]))
-#     return 1 / (1 + np.std(counts) / np.mean(counts))
-
-
-# def degree_regularization(G):
-#     """Measures how uniform in/out-degree distribution is (1 = perfectly regular).
-#     TODO: Needs review.
-#     """
-#     indeg = np.array([d for _, d in G.in_degree()])
-#     outdeg = np.array([d for _, d in G.out_degree()])
-#     total_deg = indeg + outdeg
-#     if len(G) == 0 or total_deg.sum() == 0:
-#         return 1.0
-#     # Coefficient of variation: std / mean (lower = more regular)
-#     cv = np.std(total_deg) / np.mean(total_deg)
-#     # Transform into [0,1] where 1 = perfectly regular
-#     return 1 / (1 + cv)
-
-
-# # ================================================================
-# # ------------------------- Symmetry -----------------------------
-# # ================================================================
-
+# ================================================================
+# ------------------------- Symmetry -----------------------------
+# ================================================================
 
 # def symmetry_score(G):
 #     """Estimates structural symmetry based on automorphism orbits.
-#     TODO: Needs review.
+#     TODO: Exponential complexity.
 #     """
 #     UG = G.to_undirected()
 #     matcher = GraphMatcher(UG, UG)
@@ -394,27 +334,114 @@ def build_digraph(data, edge_strategy='combined', time_unit='us', payload_unit='
 #     n = len(auts)
 #     return np.log10(n + 1) / np.log10(len(G) + 1)
 
-# def approximate_symmetry(G):
-#     """Fraction of nodes sharing identical structural signatures.
-#     TODO: Needs review.
-#     """
-#     sigs = {}
-#     for n in G.nodes():
-#         sig = (
-#             G.in_degree(n),
-#             G.out_degree(n),
-#             len(nx.ancestors(G, n)),
-#             len(nx.descendants(G, n))
-#         )
-#         sigs.setdefault(sig, []).append(n)
-#     symmetric_pairs = sum(len(v) for v in sigs.values() if len(v) > 1)
-#     return symmetric_pairs / len(G)
+def approximate_symmetry(G):
+    """Fraction of nodes sharing identical structural signatures.
+    TODO: Needs review.
+    """
+    sigs = {}
+    for n in G.nodes():
+        sig = (
+            G.in_degree(n),
+            G.out_degree(n),
+            len(nx.ancestors(G, n)),
+            len(nx.descendants(G, n))
+        )
+        sigs.setdefault(sig, []).append(n)
+    symmetric_pairs = sum(len(v) for v in sigs.values() if len(v) > 1)
+    return symmetric_pairs / len(G)
 
+def symmetry_score_entropy(G):
+    """Approximate symmetry score using degree distribution entropy."""
+    UG = G.to_undirected()
+    degrees = [d for _, d in UG.degree()]
+    total = sum(degrees)
+    if total == 0:
+        return 0.0
 
-# # ================================================================
-# # ----------------------- Visualization --------------------------
-# # ================================================================
+    probs = np.array(degrees) / total
+    entropy = -np.sum(probs * np.log2(probs))
+    max_entropy = np.log2(len(G))
+    # Invert: lower entropy → higher symmetry
+    score = 1 - (entropy / max_entropy)
+    return round(score, 4)
 
+def symmetry_score_grouping(G):
+    """Approximate structural symmetry using node signature grouping."""
+    UG = G.to_undirected()
+    signatures = []
+    for node in UG.nodes():
+        deg = UG.degree(node)
+        cc = nx.clustering(UG, node)
+        signatures.append((deg, round(cc, 3)))
+
+    unique_signatures = len(set(signatures))
+    score = 1 - (unique_signatures / len(G))
+    return round(score, 4)
+
+# ================================================================
+# --------------------- Execution Metrics ------------------------
+# ================================================================
+
+def critical_path(G, include="both"):
+    """
+    Compute the critical path in a DAG.
+    
+    Parameters:
+        G       : A NetworkX DiGraph (must be a DAG).
+        attr    : Attribute to aggregate (e.g., 'dur').
+        include : 'nodes', 'edges', or 'both'.
+
+    Returns:
+        path           : List of node names (in order).
+        total_duration : Sum of attribute along the path.
+        node_attrs     : List of (node, attr value) if included.
+        edge_attrs     : List of (u, v, attr value) if included.
+    """
+    if not nx.is_directed_acyclic_graph(G):
+        raise ValueError("Critical path computation requires a DAG.")
+
+    # Compute the longest path (based on selected attr)
+    G_cp = G.copy()
+
+    # Assign edge weights depending on inclusion
+    for u, v in G_cp.edges:
+        node_u = G_cp.nodes[u].get('dur', 0)
+        edge_uv = G_cp[u][v].get('dur', 0) + G_cp[u][v].get('wait', 0)
+        if include == "nodes":
+            weight = node_u
+        elif include == "edges":
+            weight = edge_uv
+        elif include == "both":
+            weight = node_u + edge_uv
+        else:
+            raise ValueError("Invalid value for 'include': choose 'nodes', 'edges', or 'both'")
+        G_cp[u][v]['weight'] = weight
+
+    # Get the path with maximum total weight
+    path = nx.dag_longest_path(G_cp, weight='weight')
+
+    # Calculate total duration
+    node_attrs = []
+    edge_attrs = []
+    total = 0
+
+    for i, node in enumerate(path):
+        if include in ("nodes", "both"):
+            val = G.nodes[node].get('dur', 0)
+            total += val
+            node_attrs.append((node, val))
+
+        if include in ("edges", "both") and i < len(path) - 1:
+            u, v = path[i], path[i+1]
+            val = G[u][v].get(attr, 0)
+            total += val
+            edge_attrs.append((u, v, val))
+
+    return path, total, node_attrs, edge_attrs
+
+# ================================================================
+# ----------------------- Visualization --------------------------
+# ================================================================
 
 # def visualize_graph(G, critical_path_nodes=None, critical_path_edges=None):
 #     pos = tree_layout(G)
@@ -536,11 +563,35 @@ def build_profile(data, edge_strategy='combined', time_unit='us', payload_unit='
     nodes_df, edges_df = get_graph_profile(G)
 
     output_scalars = {
-        # "graph_basic_info": {
-        #     "num_vertices": G.number_of_nodes(),
-        #     "num_edges": G.number_of_edges(),
-        #     "edge_density": edge_density(G),
-        # },
+        "user": {
+            "time_unit": time_unit,
+            "payload_unit": payload_unit,
+            "edge_strategy": edge_strategy,
+        },
+        "basic": {
+            'num_vertices': num_vertices(G),
+            'num_edges': num_edges(G),
+            'edge_density': edge_density(G),
+            'avg_in_degree': average_degree(G)[0],
+            'avg_out_degree': average_degree(G)[1],
+        },
+        "hierarchical": {  
+            'width': shape_factor(G)[0],
+            'height': shape_factor(G)[1],
+            'shape_factor': shape_factor(G)[2],
+        },
+        "regularity": {
+            'degree_entropy': degree_entropy_regularity(G),
+            'degree_distribution': degree_distribution_regularity(G),
+            'level_distribution': level_distribution_regularity(G),
+        },
+        "symmetry": {
+            # 'symmetry_score': symmetry_score(G),
+            'symmetry_score_entropy': symmetry_score_entropy(G),
+            'symmetry_score_grouping': symmetry_score_grouping(G),
+            'approx_symmetry': approximate_symmetry(G),
+        },
+        "levels": nodes_by_level(G)
     }
 
     output_matrices = {
@@ -550,51 +601,6 @@ def build_profile(data, edge_strategy='combined', time_unit='us', payload_unit='
 
     return output_scalars, output_matrices, G
 
-
-# def preprocess_graph(G, include_root_end=False):
-#     """Remove artificial root and end nodes if requested."""
-#     if include_root_end:
-#         return G.copy()
-
-#     # Explicitly remove nodes named "root" or "end" (case-insensitive)
-#     named_nodes = [n for n in G.nodes() if str(n).lower() in {"root", "end"}]
-
-#     # Create a copy and remove these nodes
-#     H = G.copy()
-#     H.remove_nodes_from(named_nodes)
-#     return H
-
-
-# def compute_structural_metrics(G, selected_groups='all', include_root_end=False):
-#     """Compute requested metric groups and return a pandas Series."""
-#     G = preprocess_graph(G, include_root_end=include_root_end)
-
-#     results = {
-#         "basic": {
-#             'num_vertices': num_vertices(G),
-#             'num_edges': num_edges(G),
-#             'edge_density': edge_density(G),
-#             'avg_in_degree': average_degree(G)[0],
-#             'avg_out_degree': average_degree(G)[1],
-#         },
-#         "hierarchical": {  
-#             'width': shape_factor(G)[0],
-#             'height': shape_factor(G)[1],
-#             'shape_factor': shape_factor(G)[2],
-#         },
-#         "regularity": {
-#             'structural_entropy': structural_entropy(G),
-#             'level_regularization': level_regularization(G),
-#             'degree_regularization': degree_regularization(G),
-#         },
-#         "symmetry": {
-#             'symmetry_score': symmetry_score(G),
-#             'approx_symmetry': approximate_symmetry(G),
-#         },
-#         "levels": levels(G)
-#     }
-
-#     return results
 
 
 # def compute_execution_metrics(G, attr="dur", include="both"):
