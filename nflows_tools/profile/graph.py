@@ -94,10 +94,11 @@ def build_digraph(data, edge_strategy='combined', time_unit='us', payload_unit='
             G.add_edge(
                 u, v,
                 write_payload=scale_payload(payload, payload_unit),
-                wirte_start=scale_time(start, time_unit),
+                write_start=scale_time(start, time_unit),
                 write_end=scale_time(end, time_unit),
                 write_dur=scale_time(end - start, time_unit),
-                write_locality=write_locality
+                write_locality=write_locality,
+                dur=scale_time(end - start, time_unit)
             )
 
     elif edge_strategy == 'read':
@@ -114,7 +115,8 @@ def build_digraph(data, edge_strategy='combined', time_unit='us', payload_unit='
                 read_start=scale_time(start, time_unit),
                 read_end=scale_time(end, time_unit),
                 read_dur=scale_time(end - start, time_unit),
-                read_locality=read_locality
+                read_locality=read_locality,
+                dur=scale_time(end - start, time_unit)
             )
 
     elif edge_strategy == 'combined':
@@ -163,6 +165,13 @@ def build_digraph(data, edge_strategy='combined', time_unit='us', payload_unit='
                 dur=scale_time(dur_without_wait, time_unit),
                 wait=scale_time(wait, time_unit),
             )
+
+            # The desition to consider dur_without_wait as main duration is based on the idea that
+            # First the critical path is the longest path through the network that establioshes the "minimum" time
+            # overall proyect duration. That minimum time do not consider the waiting times.
+            # Any waiting time will increase this minimum, becoming the makespan, maximum task compeltion time.
+            # Reference: Chapter 1 - Project Scheduling (Theodore J.  et al) - Redefining the Critical Path
+            # DOI: https://doi.org/10.1016/B978-1-85617-677-4.00001-5
 
     return G
 
@@ -460,62 +469,108 @@ def entropy_structural_symmetry(G, k=8, random_state=0):
 # --------------------- Execution Metrics ------------------------
 # ================================================================
 
-def critical_path(G, include="both"):
-    """
-    Compute the critical path in a DAG.
-    
-    Parameters:
-        G       : A NetworkX DiGraph (must be a DAG).
-        attr    : Attribute to aggregate (e.g., 'dur').
-        include : 'nodes', 'edges', or 'both'.
-
-    Returns:
-        path           : List of node names (in order).
-        total_duration : Sum of attribute along the path.
-        node_attrs     : List of (node, attr value) if included.
-        edge_attrs     : List of (u, v, attr value) if included.
-    """
+def longest_path_with_nodes(G, edge_weight="dur", node_weight="dur"):
+    """Compute the longest path in a DAG considering both edge and node weights."""
     if not nx.is_directed_acyclic_graph(G):
-        raise ValueError("Critical path computation requires a DAG.")
+        raise nx.NetworkXError("Input graph must be a DAG.")
 
-    # Compute the longest path (based on selected attr)
-    G_cp = G.copy()
+    # Initialize distance and predecessor maps
+    dist = {}
+    pred = {}
 
-    # Assign edge weights depending on inclusion
-    for u, v in G_cp.edges:
-        node_u = G_cp.nodes[u].get('dur', 0)
-        edge_uv = G_cp[u][v].get('dur', 0) + G_cp[u][v].get('wait', 0)
-        if include == "nodes":
-            weight = node_u
-        elif include == "edges":
-            weight = edge_uv
-        elif include == "both":
-            weight = node_u + edge_uv
-        else:
-            raise ValueError("Invalid value for 'include': choose 'nodes', 'edges', or 'both'")
-        G_cp[u][v]['weight'] = weight
+    # Process nodes in topological order
+    for node in nx.topological_sort(G):
+        node_cost = G.nodes[node][node_weight]
 
-    # Get the path with maximum total weight
-    path = nx.dag_longest_path(G_cp, weight='weight')
+        # Compute best predecessor distance
+        max_dist = 0
+        best_pred = None
+        for u in G.predecessors(node):
+            edge_cost = G[u][node][edge_weight]
+            cand = dist[u] + edge_cost
+            if cand > max_dist:
+                max_dist = cand
+                best_pred = u
+
+        dist[node] = max_dist + node_cost
+        pred[node] = best_pred
+
+    # Find the node with the maximum distance
+    end_node = max(dist, key=dist.get)
+
+    # Reconstruct the path
+    path = []
+    while end_node is not None:
+        path.append(end_node)
+        end_node = pred[end_node]
+    path.reverse()
 
     # Calculate total duration
     node_attrs = []
     edge_attrs = []
-    total = 0
 
     for i, node in enumerate(path):
-        if include in ("nodes", "both"):
-            val = G.nodes[node].get('dur', 0)
-            total += val
-            node_attrs.append((node, val))
+        val = G.nodes[node][node_weight]
+        node_attrs.append((node, val))
 
-        if include in ("edges", "both") and i < len(path) - 1:
+        if i < len(path) - 1:
             u, v = path[i], path[i+1]
-            val = G[u][v].get(attr, 0)
-            total += val
-            edge_attrs.append((u, v, val))
+            val = G[u][v][edge_weight]
+            write_locality = G[u][v].get('write_locality', '-')
+            write_dur = G[u][v].get('write_dur', 0)
+            read_locality = G[u][v].get('read_locality', '-')
+            read_dur = G[u][v].get('read_dur', 0)
+            edge_attrs.append((f'{u}->{v}', val, write_locality, write_dur, read_locality, read_dur))
 
-    return path, total, node_attrs, edge_attrs
+    return path, dist[path[-1]], node_attrs, edge_attrs
+
+def longest_path_edges_locality_summary(edges_df):
+    """
+    Compute plain and weighted percentages of write/read locality types.
+
+    Weighted percentages are based on their respective durations:
+      - write_locality → weighted by 'write_dur'
+      - read_locality  → weighted by 'read_dur'
+
+    Returns:
+        summary_df : pd.DataFrame with columns:
+            ['write_% (plain)', 'write_% (weighted)',
+             'read_% (plain)', 'read_% (weighted)']
+    """
+
+    def plain_percentage(series):
+        counts = series.value_counts(dropna=False)
+        total = counts.sum()
+        return (counts / total).round(4)
+
+    def weighted_percentage(df, col, dur_col):
+        total = df[dur_col].sum()
+        if total == 0:
+            return pd.Series(dtype=float)
+        return (
+            df.groupby(col)[dur_col].sum() / total
+        ).round(4)
+
+    # ---- Plain percentages ----
+    write_plain = plain_percentage(edges_df["write_locality"])
+    read_plain = plain_percentage(edges_df["read_locality"])
+
+    # ---- Weighted percentages ----
+    write_weighted = weighted_percentage(edges_df, "write_locality", "write_dur")
+    read_weighted = weighted_percentage(edges_df, "read_locality", "read_dur")
+
+    # ---- Combine all results ----
+    summary = pd.DataFrame({
+        "write_% (plain)": write_plain,
+        "write_% (weighted)": write_weighted,
+        "read_% (plain)": read_plain,
+        "read_% (weighted)": read_weighted,
+    }).fillna(0)
+
+    # Ensure consistent order
+    summary = summary.reindex(["local", "remote", "mixed"]).fillna(0)
+
+    return summary
 
 # ================================================================
 # ----------------------- Visualization --------------------------
@@ -561,7 +616,6 @@ def critical_path(G, include="both"):
 #     plt.tight_layout()
 #     plt.show()
 
-
 # ================================================================
 # -------------------------- Reporting ---------------------------
 # ================================================================
@@ -589,7 +643,7 @@ def print_profile(output_scalars, output_matrices):
 
 def get_graph_profile(G):
     # ---- Nodes ----
-    node_headers = ["task", "payload", "start", "end", "dur", "numa_id", "core_id"]
+    node_headers = ["node", "payload", "start", "end", "dur", "numa_id", "core_id"]
     node_table = []
 
     for n, d in G.nodes(data=True):
@@ -637,8 +691,21 @@ def get_graph_profile(G):
 
 def build_profile(data, edge_strategy='combined', time_unit='us', payload_unit='B'):
     G = build_digraph(data, edge_strategy=edge_strategy, time_unit=time_unit, payload_unit=payload_unit)
-
     nodes_df, edges_df = get_graph_profile(G)
+
+    path, total_dur, node_attrs, edge_attrs = longest_path_with_nodes(G)
+
+    longest_path_nodes_df = pd.DataFrame(node_attrs, columns=["node", 'weight'])
+    longest_path_edges_df = pd.DataFrame(edge_attrs, columns=["edge", 'weight', "write_locality", "write_dur", "read_locality", "read_dur"])
+
+    longest_path_edges_locality_df = longest_path_edges_locality_summary(longest_path_edges_df)
+
+    # # Extract entities
+    # critical_nodes = [n for n, _ in node_data]
+    # critical_edges = [(u, v) for u, v, _ in edge_data]
+
+    # # Visualize
+    # visualize_graph_with_critical_path(G, critical_path_nodes=critical_nodes, critical_path_edges=critical_edges)
 
     output_scalars = {
         "user": {
@@ -668,42 +735,23 @@ def build_profile(data, edge_strategy='combined', time_unit='us', payload_unit='
             "continuous_structural": continuous_structural_symmetry(G),
             "entropy_structural": entropy_structural_symmetry(G),
         },
-        "levels": nodes_by_level(G)
+        "levels": nodes_by_level(G),
+        "longest_path": {
+            "path_length": len(path),
+            "path_duration": total_dur,
+            # "path_nodes": path,
+        },
     }
 
     output_matrices = {
+        "longest_path_nodes": (longest_path_nodes_df, longest_path_nodes_df.columns, 'data[0].shape[0]'),
+        "longest_path_edges": (longest_path_edges_df, longest_path_edges_df.columns, 'data[0].shape[0]'),
+        "longest_path_edges_locality": (longest_path_edges_locality_df, longest_path_edges_locality_df.columns, 'data[0].shape[0]'),
         "nodes": (nodes_df, nodes_df.columns, 'data[0].shape[0]'),
         "edges": (edges_df, edges_df.columns, 'data[0].shape[0]'),
     }
 
     return output_scalars, output_matrices, G
-
-
-
-# def compute_execution_metrics(G, attr="dur", include="both"):
-#     """Compute execution-related metrics and return a pandas Series."""
-#     results = {}
-
-#     # Critical Path
-#     path, total_dur, node_attrs, edge_attrs = compute_critical_path(G, attr=attr, include=include)
-#     results['path_duration'] = total_dur
-#     results['path_length'] = len(path)
-#     results['path_nodes'] = path
-
-#     # Additional execution metrics can be added here
-
-#     return pd.Series(results)
-
-# def build_profile(data, edge_strategy='combined', **kwargs):
-#     G = build_digraph(data, edge_strategy=edge_strategy, **kwargs)
-
-#     structural_metrics = compute_metrics(G, selected_groups='all', include_root_end=False)
-#     execution_metrics = {
-
-#     }
-#     return G
-
-
 
 # def print_graph(G):
 #     # ---- Print nodes ----
