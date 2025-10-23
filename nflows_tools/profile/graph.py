@@ -736,10 +736,24 @@ def build_profile(data, edge_strategy='combined', time_unit='us', payload_unit='
             "entropy_structural": entropy_structural_symmetry(G),
         },
         "levels": nodes_by_level(G),
-        "longest_path": {
-            "path_length": len(path),
-            "path_duration": total_dur,
-            # "path_nodes": path,
+        "critical_path": {
+            "length": len(path),
+            "duration": total_dur,
+            "read_accesses_local_perc":  longest_path_edges_locality_df.loc["local",  "read_% (plain)"],
+            "read_accesses_remote_perc": longest_path_edges_locality_df.loc["remote", "read_% (plain)"],
+            "read_accesses_mixed_perc":  longest_path_edges_locality_df.loc["mixed",  "read_% (plain)"],
+
+            "write_accesses_local_perc": longest_path_edges_locality_df.loc["local",  "write_% (plain)"],
+            "write_accesses_remote_perc":longest_path_edges_locality_df.loc["remote", "write_% (plain)"],
+            "write_accesses_mixed_perc": longest_path_edges_locality_df.loc["mixed",  "write_% (plain)"],
+
+            "read_time_local_perc":      longest_path_edges_locality_df.loc["local",  "read_% (weighted)"],
+            "read_time_remote_perc":     longest_path_edges_locality_df.loc["remote", "read_% (weighted)"],
+            "read_time_mixed_perc":      longest_path_edges_locality_df.loc["mixed",  "read_% (weighted)"],
+
+            "write_time_local_perc":     longest_path_edges_locality_df.loc["local",  "write_% (weighted)"],
+            "write_time_remote_perc":    longest_path_edges_locality_df.loc["remote", "write_% (weighted)"],
+            "write_time_mixed_perc":     longest_path_edges_locality_df.loc["mixed",  "write_% (weighted)"],
         },
     }
 
