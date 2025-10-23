@@ -11,6 +11,8 @@ from math import log2
 import networkx as nx
 import argparse
 
+from sklearn.cluster import KMeans
+from itertools import combinations
 from networkx.algorithms.isomorphism import GraphMatcher
 from networkx.drawing.nx_pydot import write_dot
 from collections import defaultdict, deque
@@ -323,20 +325,23 @@ def level_distribution_regularity(G):
 # ------------------------- Symmetry -----------------------------
 # ================================================================
 
-# def symmetry_score(G):
-#     """Estimates structural symmetry based on automorphism orbits.
-#     TODO: Exponential complexity.
-#     """
-#     UG = G.to_undirected()
-#     matcher = GraphMatcher(UG, UG)
-#     # Get all automorphisms (expensive for large graphs)
-#     auts = list(matcher.isomorphisms_iter())
-#     n = len(auts)
-#     return np.log10(n + 1) / np.log10(len(G) + 1)
-
-def approximate_symmetry(G):
+def discriete_structural_symmetry(G):
     """Fraction of nodes sharing identical structural signatures.
-    TODO: Needs review.
+
+    | Graph type                        | Expected value | Interpretation                               |
+    | --------------------------------- | -------------- | -------------------------------------------- |
+    | Linear chain (A→B→C→D)            | 0              | Every node has a distinct signature          |
+    | Star (center→leaves)              | ≈ 0.8          | All leaves share identical signatures        |
+    | Perfectly regular k×k lattice DAG | 1              | All nodes have identical structural patterns |
+
+    - Range: [0, 1]
+    - Not continuous: small structural changes can drop the score abruptly
+    - Normalized meaning: yes, higher = more symmetric structure
+    - Sensitive to graph size and discrete degree changes
+
+    The current approximate_symmetry() is binary: two nodes are either identical or not, based on discrete equality 
+    of their signatures. That’s fine for coarse symmetry detection, but it misses subtle similarities (e.g., two nodes 
+    with nearly equal degrees or similar ancestor/descendant counts).
     """
     sigs = {}
     for n in G.nodes():
@@ -350,33 +355,106 @@ def approximate_symmetry(G):
     symmetric_pairs = sum(len(v) for v in sigs.values() if len(v) > 1)
     return symmetric_pairs / len(G)
 
-def symmetry_score_entropy(G):
-    """Approximate symmetry score using degree distribution entropy."""
-    UG = G.to_undirected()
-    degrees = [d for _, d in UG.degree()]
-    total = sum(degrees)
-    if total == 0:
-        return 0.0
+def continuous_structural_symmetry(G):
+    """Estimates structural symmetry in a continuous way.
+    Returns a normalized score in [0,1].
+    
+    - 1 → perfectly symmetric structure
+    - 0 → completely asymmetric
 
-    probs = np.array(degrees) / total
-    entropy = -np.sum(probs * np.log2(probs))
-    max_entropy = np.log2(len(G))
-    # Invert: lower entropy → higher symmetry
-    score = 1 - (entropy / max_entropy)
-    return round(score, 4)
+    | Value        | Meaning                                    |
+    | ------------ | ------------------------------------------ |
+    | **1.0**      | All nodes are structurally identical       |
+    | **≈0.8–0.9** | Highly regular (like grids, stars)         |
+    | **≈0.5**     | Some repeating patterns but not uniform    |
+    | **≈0.0–0.2** | Irregular DAG with distinct roles per node |
 
-def symmetry_score_grouping(G):
-    """Approximate structural symmetry using node signature grouping."""
-    UG = G.to_undirected()
-    signatures = []
-    for node in UG.nodes():
-        deg = UG.degree(node)
-        cc = nx.clustering(UG, node)
-        signatures.append((deg, round(cc, 3)))
+    | Aspect         | Old `approximate_symmetry`  | New `continuous_symmetry`         |
+    | -------------- | --------------------------- | --------------------------------- |
+    | Comparison     | Binary (equal / not equal)  | Continuous (degree of similarity) |
+    | Range          | [0, 1]                      | [0, 1]                            |
+    | Sensitivity    | Discrete jumps              | Smooth variation                  |
+    | Interpretation | Fraction of identical nodes | Average pairwise similarity       |
+    """
 
-    unique_signatures = len(set(signatures))
-    score = 1 - (unique_signatures / len(G))
-    return round(score, 4)
+    if len(G) <= 1:
+        return 1.0
+
+    # Feature vectors per node
+    feats = []
+    for n in G.nodes():
+        feats.append([
+            G.in_degree(n),
+            G.out_degree(n),
+            len(nx.ancestors(G, n)),
+            len(nx.descendants(G, n))
+        ])
+    feats = np.array(feats, dtype=float)
+
+    # Normalize features to avoid scale dominance
+    if np.any(feats):
+        feats = (feats - feats.min(axis=0)) / (np.ptp(feats, axis=0) + 1e-9)
+
+    # Compute pairwise cosine similarity between all node signatures
+    sims = []
+    for i, j in combinations(range(len(G)), 2):
+        a, b = feats[i], feats[j]
+        denom = np.linalg.norm(a) * np.linalg.norm(b)
+        sims.append(np.dot(a, b) / denom if denom else 1.0)
+
+    # Average similarity as overall symmetry measure
+    return np.mean(sims)
+
+def entropy_structural_symmetry(G, k=8, random_state=0):
+    """Approximates structural symmetry via clustering of node signatures.
+
+    | Symmetry score | Meaning                                            |
+    | -------------- | -------------------------------------------------- |
+    | **≈1.0**       | Most nodes share similar connectivity patterns     |
+    | **≈0.7–0.8**   | Graph has repeated motifs or balanced structure    |
+    | **≈0.3–0.5**   | Moderate diversity in node structures              |
+    | **≈0.0–0.2**   | Highly irregular; few or no structural repetitions |
+    
+    Returns a normalized score in [0,1]:
+    - 1 → highly symmetric (many nodes share similar structure)
+    - 0 → highly asymmetric (each node structurally unique)
+    
+    Parameters:
+    - k: number of clusters (higher captures more nuance)
+    - random_state: ensures reproducibility
+    """
+    n = len(G)
+    if n <= 1:
+        return 1.0
+
+    # --- Step 1: Build feature vectors ---
+    feats = np.array([
+        [G.in_degree(n), G.out_degree(n),
+         len(nx.ancestors(G, n)), len(nx.descendants(G, n))]
+        for n in G.nodes()
+    ], dtype=float)
+
+    # --- Step 2: Normalize features ---
+    if np.any(np.ptp(feats, axis=0)):
+        feats = (feats - feats.min(axis=0)) / (np.ptp(feats, axis=0) + 1e-9)
+
+    # --- Step 3: Cluster node signatures ---
+    k = min(k, n)  # can't have more clusters than nodes
+    km = KMeans(n_clusters=k, n_init=10, random_state=random_state)
+    labels = km.fit_predict(feats)
+
+    # --- Step 4: Measure balance of cluster sizes ---
+    counts = np.bincount(labels)
+    probs = counts / n
+
+    # Shannon entropy normalized by maximum possible entropy (log2(k))
+    H = -np.sum(probs * np.log2(probs + 1e-12))
+    H_norm = H / np.log2(k)
+
+    # High entropy (uniform distribution) → many unique patterns (low symmetry)
+    # Low entropy (few dense clusters) → high symmetry
+    symmetry_score = 1 - H_norm
+    return float(symmetry_score)
 
 # ================================================================
 # --------------------- Execution Metrics ------------------------
@@ -586,10 +664,9 @@ def build_profile(data, edge_strategy='combined', time_unit='us', payload_unit='
             'level_distribution': level_distribution_regularity(G),
         },
         "symmetry": {
-            # 'symmetry_score': symmetry_score(G),
-            'symmetry_score_entropy': symmetry_score_entropy(G),
-            'symmetry_score_grouping': symmetry_score_grouping(G),
-            'approx_symmetry': approximate_symmetry(G),
+            "discrete_structural": discriete_structural_symmetry(G),
+            "continuous_structural": continuous_structural_symmetry(G),
+            "entropy_structural": entropy_structural_symmetry(G),
         },
         "levels": nodes_by_level(G)
     }
