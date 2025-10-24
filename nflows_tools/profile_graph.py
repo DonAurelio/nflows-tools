@@ -19,7 +19,7 @@ from networkx.drawing.nx_pydot import write_dot
 from collections import defaultdict, deque, Counter
 from tabulate import tabulate
 
-from common import scale_time, scale_payload, flatten_dict, print_profile, export_profile
+from nflows_tools.common import scale_time, scale_payload, flatten_dict, print_profile, export_profile
 
 def build_digraph(data, edge_strategy='combined', time_unit='us', payload_unit='B', **kwargs):
     G = nx.DiGraph()

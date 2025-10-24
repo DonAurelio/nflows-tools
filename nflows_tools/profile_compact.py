@@ -9,7 +9,7 @@ import pandas as pd
 import numpy as np
 import argparse
 
-from common import scale_time, scale_payload, flatten_dict, print_profile, export_profile
+from nflows_tools.common import scale_time, scale_payload, flatten_dict, print_profile, export_profile
 
 def get_machine_average_numa_factor(data):
     """

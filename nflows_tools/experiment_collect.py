@@ -12,7 +12,7 @@ import argparse
 from nflows_tools import profile_compact
 from nflows_tools import profile_graph
 
-from common import flatten_dict
+from nflows_tools.common import flatten_dict
 
 def collect_profiles(root_dir, mode, rel_lat_matrix, time_unit, payload_unit, edge_strategy=None):
     """Collects profiling results from YAML files and aggregates them into a DataFrame."""
