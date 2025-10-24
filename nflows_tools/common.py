@@ -2,6 +2,10 @@
 @authors: ChatGPT, Aurelio Vivas <aa.vivas@uniandes.edu.co>
 """
 
+import pandas as pd
+from tabulate import tabulate
+from colorama import Fore, Style
+
 def scale_time(value, unit):
     scale_factors = {'us': 1, 'ms': 1e3, 's': 1e6, 'min': 6e7}
     return float(value) / float(scale_factors[unit])

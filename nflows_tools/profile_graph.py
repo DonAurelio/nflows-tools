@@ -16,10 +16,10 @@ from itertools import combinations
 import matplotlib.pyplot as plt
 from networkx.algorithms.isomorphism import GraphMatcher
 from networkx.drawing.nx_pydot import write_dot
-from collections import defaultdict, deque
+from collections import defaultdict, deque, Counter
 from tabulate import tabulate
 
-from common import scale_time, scale_payload, flatten_dict, print_dict, print_df
+from common import scale_time, scale_payload, flatten_dict, print_profile, export_profile
 
 def build_digraph(data, edge_strategy='combined', time_unit='us', payload_unit='B', **kwargs):
     G = nx.DiGraph()
@@ -567,6 +567,53 @@ def longest_path_edges_locality_summary(edges_df):
 
     return summary
 
+def load_balance_entropy(G, level="numa_id"):
+    """
+    Computes the Normalized Entropy (NE) of task distribution among NUMA domains or cores.
+
+    Parameters
+    ----------
+    G : nx.DiGraph
+        Workflow graph where each node has attributes 'numa_id' and 'core_id'.
+    level : str, optional
+        Attribute to measure balance by ('numa_id' or 'core_id'). Default is 'numa_id'.
+
+    Returns
+    -------
+    float
+        Normalized entropy in [0, 1]:
+        - 1.0 => perfectly balanced (equal number of tasks per domain/core)
+        - 0.0 => completely imbalanced (all tasks on one domain/core)
+    """
+    # --- Extract the attribute values for all tasks ---
+    if level not in ('numa_id', 'core_id'):
+        raise ValueError("level must be either 'numa_id' or 'core_id'")
+
+    attrs = [G.nodes[n].get(level) for n in G.nodes]
+    if not attrs:
+        raise ValueError("Graph has no nodes or missing attributes.")
+
+    # --- Count how many tasks per NUMA domain or core ---
+    counts = Counter(attrs)
+    total_tasks = sum(counts.values())
+    N = len(counts)  # number of unique domains/cores observed
+
+    if total_tasks == 0 or N <= 1:
+        # If all tasks in one domain/core, NE = 0 by definition
+        return 0.0
+
+    # --- Compute probability distribution ---
+    probs = [count / total_tasks for count in counts.values()]
+
+    # --- Compute Shannon entropy (base 2) ---
+    # H = -sum(p * math.log(p, 2) for p in probs if p > 0)
+    H = -np.sum(probs * np.log2(probs))
+
+    # --- Normalize by the maximum possible entropy log2(N) ---
+    # H_norm = H / math.log(N, 2)
+    H_norm = H / np.log2(N)
+    return H_norm
+
 # ================================================================
 # ----------------------- Visualization --------------------------
 # ================================================================
@@ -802,6 +849,10 @@ def build_profile(data, edge_strategy='combined', time_unit='us', payload_unit='
             "write_time_local_perc":     longest_path_edges_locality_df.loc["local",  "write_% (weighted)"],
             "write_time_remote_perc":    longest_path_edges_locality_df.loc["remote", "write_% (weighted)"],
             "write_time_mixed_perc":     longest_path_edges_locality_df.loc["mixed",  "write_% (weighted)"],
+        },
+        "load_balance": {
+            "numa_entropy": load_balance_entropy(G, level="numa_id"),
+            "core_entropy": load_balance_entropy(G, level="core_id"),
         },
     }
 

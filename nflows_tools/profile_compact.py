@@ -9,10 +9,7 @@ import pandas as pd
 import numpy as np
 import argparse
 
-from tabulate import tabulate
-from colorama import Fore, Style
-
-from common import scale_time, scale_payload, flatten_dict, print_dict, print_df
+from common import scale_time, scale_payload, flatten_dict, print_profile, export_profile
 
 def get_machine_average_numa_factor(data):
     """
