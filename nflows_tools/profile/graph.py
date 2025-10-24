@@ -13,6 +13,7 @@ import argparse
 
 from sklearn.cluster import KMeans
 from itertools import combinations
+import matplotlib.pyplot as plt
 from networkx.algorithms.isomorphism import GraphMatcher
 from networkx.drawing.nx_pydot import write_dot
 from collections import defaultdict, deque
@@ -576,45 +577,126 @@ def longest_path_edges_locality_summary(edges_df):
 # ----------------------- Visualization --------------------------
 # ================================================================
 
-# def visualize_graph(G, critical_path_nodes=None, critical_path_edges=None):
-#     pos = tree_layout(G)
-#     plt.figure(figsize=(12, 8))
+def tree_layout(G):
+    """Create a tree-like hierarchical layout for a DAG."""
 
-#     # Default all nodes and edges
-#     all_nodes = set(G.nodes)
-#     all_edges = set(G.edges)
+    # Compute levels using topological sort
+    levels = defaultdict(int)
+    in_degree = {n: 0 for n in G.nodes}
+    for u, v in G.edges:
+        in_degree[v] += 1
+
+    # BFS to assign levels
+    queue = deque([n for n in G.nodes if in_degree[n] == 0])
+    while queue:
+        node = queue.popleft()
+        for neighbor in G.successors(node):
+            levels[neighbor] = max(levels[neighbor], levels[node] + 1)
+            in_degree[neighbor] -= 1
+            if in_degree[neighbor] == 0:
+                queue.append(neighbor)
+
+    # Group nodes by level
+    level_nodes = defaultdict(list)
+    for node, level in levels.items():
+        level_nodes[level].append(node)
+
+    # Assign positions
+    pos = {}
+    for level, nodes_at_level in level_nodes.items():
+        for i, node in enumerate(sorted(nodes_at_level)):
+            pos[node] = (i, -level)  # Y-axis is level (reversed for top-down)
+
+    return pos
+
+def export_pdf(G, export_pdf, critical_path_nodes=None, critical_path_edges=None):
+    """
+    Exports a DAG visualization as a high-quality PDF.
     
-#     # Critical path elements
-#     cp_nodes = set(critical_path_nodes or [])
-#     cp_edges = set(critical_path_edges or [])
+    Parameters
+    ----------
+    G : networkx.DiGraph
+        The task graph to visualize.
+    export_pdf : str
+        Path to the output PDF file.
+    critical_path_nodes : list, optional
+        List of nodes belonging to the critical path.
+    critical_path_edges : list, optional
+        List of edges belonging to the critical path.
+    """
+    # pos = nx.nx_agraph.graphviz_layout(G, prog="dot")  # Use Graphviz layout for clean hierarchy
+    # plt.figure(figsize=(12, 8))
+    pos = tree_layout(G)
+    plt.figure(figsize=(12, 8))
 
-#     # Draw non-critical nodes
-#     nx.draw_networkx_nodes(G, pos, nodelist=list(all_nodes - cp_nodes), node_size=700,
-#                            node_color='lightgray', edgecolors='black')
-#     # Draw critical path nodes
-#     nx.draw_networkx_nodes(G, pos, nodelist=list(cp_nodes), node_size=700,
-#                            node_color='tomato', edgecolors='black')
+    # Default all nodes and edges
+    all_nodes = set(G.nodes)
+    all_edges = set(G.edges)
+    
+    # Critical path elements
+    cp_nodes = set(critical_path_nodes or [])
+    cp_edges = set(critical_path_edges or [])
 
-#     # Labels for all nodes
-#     nx.draw_networkx_labels(G, pos, font_size=9)
+    # Draw non-critical nodes
+    nx.draw_networkx_nodes(
+        G, pos,
+        nodelist=list(all_nodes - cp_nodes),
+        node_size=700,
+        node_color='lightgray',
+        edgecolors='black',
+        linewidths=0.8
+    )
 
-#     # Draw non-critical edges
-#     nx.draw_networkx_edges(G, pos, edgelist=list(all_edges - cp_edges),
-#                            edge_color='lightgray', arrows=True, arrowstyle='->', arrowsize=15)
-#     # Draw critical path edges
-#     nx.draw_networkx_edges(G, pos, edgelist=list(cp_edges),
-#                            edge_color='red', width=2.5, arrows=True, arrowstyle='->', arrowsize=20)
+    # Draw critical path nodes
+    nx.draw_networkx_nodes(
+        G, pos,
+        nodelist=list(cp_nodes),
+        node_size=700,
+        node_color='tomato',
+        edgecolors='black',
+        linewidths=1.2
+    )
 
-#     # Optionally draw durations
-#     edge_labels = {
-#         (u, v): f"{d['dur']:.1f}" for u, v, d in G.edges(data=True)
-#     }
-#     nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_size=8)
+    # Labels for all nodes
+    nx.draw_networkx_labels(G, pos, font_size=9)
 
-#     plt.title("Task Graph")
-#     plt.axis('off')
-#     plt.tight_layout()
-#     plt.show()
+    # Draw non-critical edges
+    nx.draw_networkx_edges(
+        G, pos,
+        edgelist=list(all_edges - cp_edges),
+        edge_color='lightgray',
+        arrows=True,
+        arrowstyle='->',
+        arrowsize=15,
+        width=1.0
+    )
+
+    # Draw critical path edges
+    nx.draw_networkx_edges(
+        G, pos,
+        edgelist=list(cp_edges),
+        edge_color='red',
+        width=2.5,
+        arrows=True,
+        arrowstyle='->',
+        arrowsize=20
+    )
+
+    # Optionally draw edge duration labels
+    edge_labels = {
+        (u, v): f"{d.get('dur', 0):.1f}" for u, v, d in G.edges(data=True)
+    }
+    nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_size=8)
+
+    plt.title("Task Graph", fontsize=12)
+    plt.axis('off')
+    plt.tight_layout()
+
+    # Save high-quality PDF
+    plt.savefig(export_pdf, format='pdf', dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"Graph successfully exported to: {export_pdf}")
 
 # ================================================================
 # -------------------------- Reporting ---------------------------
@@ -700,13 +782,6 @@ def build_profile(data, edge_strategy='combined', time_unit='us', payload_unit='
 
     longest_path_edges_locality_df = longest_path_edges_locality_summary(longest_path_edges_df)
 
-    # # Extract entities
-    # critical_nodes = [n for n, _ in node_data]
-    # critical_edges = [(u, v) for u, v, _ in edge_data]
-
-    # # Visualize
-    # visualize_graph_with_critical_path(G, critical_path_nodes=critical_nodes, critical_path_edges=critical_edges)
-
     output_scalars = {
         "user": {
             "time_unit": time_unit,
@@ -765,58 +840,29 @@ def build_profile(data, edge_strategy='combined', time_unit='us', payload_unit='
         "edges": (edges_df, edges_df.columns, 'data[0].shape[0]'),
     }
 
-    return output_scalars, output_matrices, G
+    return output_scalars, output_matrices, G, path, node_attrs, edge_attrs
 
-# def print_graph(G):
-#     # ---- Print nodes ----
-#     print("\nNodes (Tasks):")
-#     node_table = []
-#     for n, d in G.nodes(data=True):
-#         node_table.append([
-#             n,
-#             d.get('start'),
-#             d.get('end'),
-#             d.get('payload', '-'),
-#             d.get('dur'),
-#             d.get('numa_id', '-'),
-#             d.get('core_id', '-')
-#         ])
+def flatten_dict(d, parent_key='', sep='_'):
+    """
+    Recursively flattens a nested dictionary using the given separator.
 
-#     print(tabulate(
-#         node_table,
-#         headers=["Task", "Start", "End", "Payload", "Duration", "NUMA ID", "Core ID"]
-#     ))
+    Example:
+        flatten_dict({"a": {"b": 1, "c": 2}}, parent_key="x")
+        -> {"x_a_b": 1, "x_a_c": 2}
+    """
+    items = []
+    for k, v in d.items():
+        new_key = f"{parent_key}{sep}{k}" if parent_key else k
+        if isinstance(v, dict):
+            items.extend(flatten_dict(v, new_key, sep=sep).items())
+        else:
+            items.append((new_key, v))
+    return dict(items)
 
-#     # ---- Print edges ----
-#     print("\nEdges (Communications):")
-#     edge_table = []
-#     for u, v, d in G.edges(data=True):
-#         row = [
-#             f"{u}->{v}",
-#             d.get('start'),
-#             d.get('end'),
-#             d.get('payload', '-'),
-#             d.get('dur'),
-#         ]
-#         # Optional columns
-#         if 'wait' in d:
-#             row.append(d['wait'])
-#         if 'write_locality' in d:
-#             row.append(d['write_locality'])
-#         if 'read_locality' in d:
-#             row.append(d['read_locality'])
-#         edge_table.append(row)
-
-#     # Determine headers dynamically
-#     headers = ["Edge", "Start", "End", "Payload", "Duration"]
-#     if any('wait' in d for _, _, d in G.edges(data=True)):
-#         headers.append("Wait")
-#     if any('write_locality' in d for _, _, d in G.edges(data=True)):
-#         headers.append("Write Locality")
-#     if any('read_locality' in d for _, _, d in G.edges(data=True)):
-#         headers.append("Read Locality")
-
-#     print(tabulate(edge_table, headers=headers))
+def export_profile(output_data, export_csv):
+    output_series = pd.Series(output_data)
+    output_series.to_csv(export_csv, header=False)
+    print(f"Profile exported: {export_csv}")
 
 def main():
     parser = argparse.ArgumentParser(description="Process NUMA access data.")
@@ -824,13 +870,33 @@ def main():
     parser.add_argument("--time_unit", type=str, choices=['us', 'ms', 's', 'min'], default='us', help="Time unit for scaling.")
     parser.add_argument("--payload_unit", type=str, choices=['B','KB', 'MB', 'GB'], default='KB', help="Payload unit for scaling.")
     parser.add_argument("--edge_strategy", type=str, choices=['write', 'read', 'combined'], default='combined', help="Edge strategy for building the graph.")
+    parser.add_argument("--export_csv", type=str, default=None, help="Path to export profile as CSV.")
+    parser.add_argument("--export_dot", type=str, default=None, help="Path to export graph as DOT file.")
+    parser.add_argument("--export_graph", type=str, default=None, help="Path to export graph as PDF file.")
+
     args = parser.parse_args()
 
     with open(args.input_yaml, "r") as file:
         data = yaml.load(file, Loader=yaml.FullLoader)
 
-    output_scalars, output_matrices, G = build_profile(data, args.edge_strategy, args.time_unit, args.payload_unit)
-    print_profile(output_scalars, output_matrices)
+    output_scalars, output_matrices, G, path, node_attrs, edge_attrs = build_profile(data, args.edge_strategy, args.time_unit, args.payload_unit)
+
+    if args.export_csv:
+        output_scalars.pop("levels")
+        output_data = flatten_dict(output_scalars)
+        export_profile(output_data, args.export_csv)
+
+    elif args.export_dot:
+        nx.drawing.nx_pydot.write_dot(G, args.export_graph)
+        print(f"Graph exported: {args.export_graph}")
+
+    elif args.export_graph:
+        critical_nodes = [n for n, _ in node_attrs]
+        critical_edges = [tuple(uv.split("->")) for uv, _, _, _, _, _ in edge_attrs]
+        export_pdf(G, args.export_graph, critical_path_nodes=critical_nodes, critical_path_edges=critical_edges)
+
+    else:
+        print_profile(output_scalars, output_matrices)
 
 if __name__ == "__main__":
     main()
