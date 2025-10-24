@@ -19,13 +19,7 @@ from networkx.drawing.nx_pydot import write_dot
 from collections import defaultdict, deque
 from tabulate import tabulate
 
-def scale_time(value, unit):
-    scale_factors = {'us': 1, 'ms': 1e3, 's': 1e6, 'min': 6e7}
-    return float(value) / float(scale_factors[unit])
-
-def scale_payload(value, unit):
-    scale_factors = {'B': 1, 'KB': 1e3, 'MB': 1e6, 'GB': 1e9}
-    return float(value) / float(scale_factors[unit])
+from common import scale_time, scale_payload, flatten_dict, print_dict, print_df
 
 def build_digraph(data, edge_strategy='combined', time_unit='us', payload_unit='B', **kwargs):
     G = nx.DiGraph()
@@ -702,27 +696,6 @@ def export_pdf(G, export_pdf, critical_path_nodes=None, critical_path_edges=None
 # -------------------------- Reporting ---------------------------
 # ================================================================
 
-def print_dict(data, title):
-    print(f"\n{title.replace('_', ' ').title()}")
-    for key, value in data.items():
-        if isinstance(value, str):
-            print(f"  {key}: {value}")
-        else:
-            print(f"  {key}: {value:.4f}")
-
-def print_df(data, title):
-    print(f"\n{title.replace('_', ' ').title()}: {eval(data[2])}")
-    table_str = tabulate(data[0], headers=data[1], tablefmt="grid", showindex=True)
-    print("\n" + "\n".join(f"  {line}" for line in table_str.split("\n")))
-
-def print_profile(output_scalars, output_matrices):
-    for key, value in output_scalars.items():
-        print_dict(value, key)
-
-    for key, value in output_matrices.items():
-        print_df(value, key)
-    print("")
-
 def get_graph_profile(G):
     # ---- Nodes ----
     node_headers = ["node", "payload", "start", "end", "dur", "numa_id", "core_id"]
@@ -858,11 +831,6 @@ def flatten_dict(d, parent_key='', sep='_'):
         else:
             items.append((new_key, v))
     return dict(items)
-
-def export_profile(output_data, export_csv):
-    output_series = pd.Series(output_data)
-    output_series.to_csv(export_csv, header=False)
-    print(f"Profile exported: {export_csv}")
 
 def main():
     parser = argparse.ArgumentParser(description="Process NUMA access data.")
